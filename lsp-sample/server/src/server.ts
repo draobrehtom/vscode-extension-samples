@@ -20,6 +20,11 @@ import {
 import {
 	TextDocument
 } from 'vscode-languageserver-textdocument';
+import { CharStreams } from 'antlr4ts/CharStreams';
+import { LuaLexer } from './parser/LuaLexer';
+import { LuaParser } from './parser/LuaParser';
+import { CommonTokenStream } from 'antlr4ts';
+import { CodeCompletionCore } from 'antlr4-c3';
 
 // Create a connection for the server, using Node's IPC as a transport.
 // Also include all preview / proposed LSP features.
@@ -55,7 +60,8 @@ connection.onInitialize((params: InitializeParams) => {
 			// Tell the client that this server supports code completion.
 			completionProvider: {
 				resolveProvider: true
-			}
+			},
+			definitionProvider: true,
 		}
 	};
 	if (hasWorkspaceFolderCapability) {
@@ -128,11 +134,40 @@ documents.onDidClose(e => {
 	documentSettings.delete(e.document.uri);
 });
 
+let eventTriggers: any = {};
+let eventHandlers: any = {};
+
+
 // The content of a text document has changed. This event is emitted
 // when the text document first opened or when its content has changed.
 documents.onDidChangeContent(change => {
 	validateTextDocument(change.document);
 });
+
+function getEventHandlersInfo(eventName: string) {
+	let result: any = [];
+	for (let uri in eventHandlers) {
+		eventHandlers[uri].forEach((v: any) => {
+			if (v.eventName === eventName) {
+				result.push(v);
+			}
+		})
+	}
+	return result;
+}
+
+function getEventTriggersInfo(eventName: string) {
+	let result: any = [];
+	for (let uri in eventTriggers) {
+		eventTriggers[uri].forEach((v: any) => {
+			if (v.eventName === eventName) {
+				result.push(v);
+			}
+		})
+	}
+	return result;
+}
+
 
 async function validateTextDocument(textDocument: TextDocument): Promise<void> {
 	// In this simple example we get the settings for every validate run.
@@ -140,46 +175,114 @@ async function validateTextDocument(textDocument: TextDocument): Promise<void> {
 
 	// The validator creates diagnostics for all uppercase words length 2 and more
 	const text = textDocument.getText();
-	const pattern = /\b[A-Z]{2,}\b/g;
 	let m: RegExpExecArray | null;
 
 	let problems = 0;
 	const diagnostics: Diagnostic[] = [];
+
+	const pattern = /AddEventHandler\("(.*)"/g;
+	eventHandlers[textDocument.uri] = [];
 	while ((m = pattern.exec(text)) && problems < settings.maxNumberOfProblems) {
 		problems++;
+		
+		// Store event handler usage
+		let eventName = m[1];
+		eventHandlers[textDocument.uri].push({
+			eventName: eventName,
+			location: {
+				uri: textDocument.uri,
+				range: {
+					start: textDocument.positionAt(m.index),
+					end: textDocument.positionAt(m.index + m[0].length)
+				},
+			}
+		});
+
+		// Show event trigger usage
 		const diagnostic: Diagnostic = {
-			severity: DiagnosticSeverity.Warning,
+			severity: DiagnosticSeverity.Hint,
 			range: {
 				start: textDocument.positionAt(m.index),
 				end: textDocument.positionAt(m.index + m[0].length)
 			},
-			message: `${m[0]} is all uppercase.`,
-			source: 'ex'
+			message: `${eventName} trigger`,
+			source: 'Triggers',
 		};
-		if (hasDiagnosticRelatedInformationCapability) {
-			diagnostic.relatedInformation = [
-				{
-					location: {
-						uri: textDocument.uri,
-						range: Object.assign({}, diagnostic.range)
-					},
-					message: 'Spelling matters'
-				},
-				{
-					location: {
-						uri: textDocument.uri,
-						range: Object.assign({}, diagnostic.range)
-					},
-					message: 'Particularly for names'
-				}
-			];
+		diagnostic.relatedInformation = [];
+
+		let triggers = getEventTriggersInfo(eventName);
+		for (let i = 0; i < triggers.length; i++) {
+			diagnostic.relatedInformation.push({
+				location: triggers[i].location,
+				message: `${triggers[i].eventName} [${i}]`
+			});
 		}
 		diagnostics.push(diagnostic);
 	}
 
+	const pattern2 = /TriggerEvent\("(.*)"/g;
+	eventTriggers[textDocument.uri] = [];
+	while ((m = pattern2.exec(text)) && problems < settings.maxNumberOfProblems) {
+		problems++;
+		
+		// Store event triggers usage
+		let eventName = m[1];
+		eventTriggers[textDocument.uri].push({
+			eventName: eventName,
+			location: {
+				uri: textDocument.uri,
+				range: {
+					start: textDocument.positionAt(m.index),
+					end: textDocument.positionAt(m.index + m[0].length)
+				},
+			}
+		});
+
+		// Show event handler usage
+		const diagnostic: Diagnostic = {
+			severity: DiagnosticSeverity.Hint,
+			range: {
+				start: textDocument.positionAt(m.index),
+				end: textDocument.positionAt(m.index + m[0].length)
+			},
+			message: `${eventName} handler`,
+			source: 'Handlers',
+		};
+
+		diagnostic.relatedInformation = [];
+
+		let handlers = getEventHandlersInfo(eventName);
+
+		for (let i = 0; i < handlers.length; i++) {
+			diagnostic.relatedInformation.push({
+				location: handlers[i].location,
+				message: `${handlers[i].eventName} [${i}]`
+			});
+		}
+		diagnostics.push(diagnostic);
+	}
+
+
 	// Send the computed diagnostics to VSCode.
 	connection.sendDiagnostics({ uri: textDocument.uri, diagnostics });
 }
+
+connection.onDidOpenTextDocument((params) => {
+    // A text document was opened in VS Code.
+    // params.uri uniquely identifies the document. For documents stored on disk, this is a file URI.
+    // params.text the initial full content of the document.
+});
+
+connection.onDidChangeTextDocument((params) => {
+    // The content of a text document has change in VS Code.
+    // params.uri uniquely identifies the document.
+    // params.contentChanges describe the content changes to the document.
+});
+
+connection.onDidCloseTextDocument((params) => {
+    // A text document was closed in VS Code.
+    // params.uri uniquely identifies the document.
+});
 
 connection.onDidChangeWatchedFiles(_change => {
 	// Monitored files have change in VSCode
@@ -222,9 +325,31 @@ connection.onCompletionResolve(
 	}
 );
 
+
+connection.onDefinition((params) => {
+	return undefined;
+});
+
 // Make the text document manager listen on the connection
 // for open, change and close text document events
 documents.listen(connection);
 
 // Listen on the connection
 connection.listen();
+
+// let code = "dsfds";
+// let input = CharStreams.fromString(code);
+// let lexer = new LuaLexer(input);
+// let parser = new LuaParser(new CommonTokenStream(lexer));
+
+// let index = /* we’ll show how to compute this later */;
+// let core = new CodeCompletionCore(parser);
+// let candidates = core.collectCandidates(index);
+
+// vscode.languages.registerHoverProvider('javascript', {
+// 	provideHover(document, position, token) {
+// 	  return {
+// 		contents: ['Hover Content']
+// 	  };
+// 	}
+// });

@@ -13,6 +13,8 @@ import {
 	TransportKind
 } from 'vscode-languageclient/node';
 
+const vscode = require('vscode');
+
 let client: LanguageClient;
 
 export function activate(context: ExtensionContext) {
@@ -38,7 +40,7 @@ export function activate(context: ExtensionContext) {
 	// Options to control the language client
 	const clientOptions: LanguageClientOptions = {
 		// Register the server for plain text documents
-		documentSelector: [{ scheme: 'file', language: 'plaintext' }],
+		documentSelector: [{ scheme: 'file', language: 'lua' }],
 		synchronize: {
 			// Notify the server about file changes to '.clientrc files contained in the workspace
 			fileEvents: workspace.createFileSystemWatcher('**/.clientrc')
@@ -52,6 +54,15 @@ export function activate(context: ExtensionContext) {
 		serverOptions,
 		clientOptions
 	);
+
+	
+	// vscode.languages.registerHoverProvider('lua', {
+	// 	provideHover(document, position, token) {
+	// 	  return {
+	// 		contents: ['Hover Content']
+	// 	  };
+	// 	}
+	// });
 
 	// Start the client. This will also launch the server
 	client.start();
